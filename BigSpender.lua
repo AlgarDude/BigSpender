@@ -2,7 +2,7 @@
 
 _addon.name = 'BigSpender'
 _addon.author = 'AlgarDude'
-_addon.version = '1.0'
+_addon.version = '1.01'
 _addon.commands = { 'bigspender', 'spend', }
 
 require('lists')
@@ -1205,6 +1205,14 @@ windower.register_event('incoming chunk', function(id, data)
         end
         checkConfirmed()
         checkAutoSpend('jp')
+    elseif id == 0x02D then
+        local parsed = packets.parse('incoming', data)
+        local player = windower.ffxi.get_player()
+        if parsed['Message'] == 719 and parsed['Player'] == player.id then
+            jpPoints[player.main_job_id] = parsed['Param 1']
+            debugLog(('0x02D message 719: %s banked on main job.'):format(pointsText('jp', parsed['Param 1'])))
+            checkAutoSpend('jp')
+        end
     elseif id == 0x029 and pendingId then
         local parsed = packets.parse('incoming', data)
         -- The game's own raise message is blocked: the client holds the merit one until the merit menu opens, and NPC menus hang until then.
