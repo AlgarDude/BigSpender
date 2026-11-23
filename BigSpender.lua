@@ -2,7 +2,7 @@
 
 _addon.name = 'BigSpender'
 _addon.author = 'AlgarDude'
-_addon.version = '1.01'
+_addon.version = '1.02'
 _addon.commands = { 'bigspender', 'spend', }
 
 require('lists')
@@ -62,6 +62,7 @@ local pendingCost = nil
 local pendingEntrySeen = false
 local pendingPointsSeen = false
 local raiseNumber = 0
+local zoneNumber = 0
 
 local runActive = false
 local runKind = nil
@@ -728,14 +729,7 @@ end
 local function failRaise(reason)
     report(('%s: %s'):format(pointName(pendingKind, pendingId), reason))
     pendingId = nil
-    if runActive then
-        if runAutomatic and runKind == 'jp' then
-            jpAutoBlocked = true
-        elseif runAutomatic then
-            meritAutoBlocked = true
-        end
-        finishRun()
-    end
+    if runActive then finishRun() end
 end
 
 --- Reports the pending raise once both its new rank and the new point total have arrived, and moves a run on.
@@ -789,8 +783,16 @@ local function sendRaise(kind, id)
     coroutine.schedule(function()
         if pendingId and raiseNumber == thisRaise then
             local stopping = runStopping
+            local retry = runActive and runAutomatic and not stopping
             failRaise('No response from the server within 5 seconds.')
             if not stopping and pendingKind ~= 'trust' then checkAutoSpend(pendingKind == 'jp' and 'merits' or 'jp') end
+            if retry then
+                report("Autospend will try again in 30 seconds.")
+                local thisZone = zoneNumber
+                coroutine.schedule(function()
+                    if zoneNumber == thisZone then checkAutoSpend(kind) end
+                end, 30)
+            end
         end
     end, 5)
 
@@ -1161,6 +1163,7 @@ windower.register_event('incoming chunk', function(id, data)
         maxMeritPoints = nil
         meritListSeen = false
         meritListNumber = meritListNumber + 1
+        zoneNumber = zoneNumber + 1
         meritAutoBlocked = false
         jpAutoBlocked = false
     elseif id == 0x08C then
