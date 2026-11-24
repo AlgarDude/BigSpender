@@ -2,7 +2,7 @@
 
 _addon.name = 'BigSpender'
 _addon.author = 'AlgarDude'
-_addon.version = '1.02'
+_addon.version = '1.03'
 _addon.commands = { 'bigspender', 'spend', }
 
 require('lists')
@@ -62,7 +62,6 @@ local pendingCost = nil
 local pendingEntrySeen = false
 local pendingPointsSeen = false
 local raiseNumber = 0
-local zoneNumber = 0
 
 local runActive = false
 local runKind = nil
@@ -746,12 +745,43 @@ local function checkConfirmed()
         if runStopping then
             finishRun('Stopped.')
         else
-            coroutine.schedule(runStep, 2)
+            local thisRaise = raiseNumber
+            coroutine.schedule(function()
+                if raiseNumber == thisRaise then runStep() end
+            end, 2)
         end
     end
 end
 
---- Sends the raise for one rank and waits up to 5 seconds for the server to confirm it.
+--- Waits 10 seconds for a raise to be confirmed, asks for the job point list once if it isn't, and fails the raise if it still isn't.
+---@param kind string 'merits', 'jp' or 'trust'
+---@param thisRaise number the raise being waited on
+---@param asked boolean|nil the job point list has already been requested
+local function awaitRaise(kind, thisRaise, asked)
+    coroutine.schedule(function()
+        if not pendingId or raiseNumber ~= thisRaise then return end
+        if kind == 'jp' and not asked then
+            debugLog('Sent 0x0C0 job point request.')
+            packets.inject(packets.new('outgoing', 0x0C0))
+            awaitRaise(kind, thisRaise, true)
+            return
+        end
+        local stopping = runStopping
+        local automatic = runActive and runAutomatic
+        failRaise(kind == 'jp' and 'No response from the server, even after asking for the job point list.' or 'No response from the server within 10 seconds.')
+        if automatic and not stopping then
+            if kind == 'jp' then jpAutoSpend = false else meritAutoSpend = false end
+            local warning = ('THE SERVER IS NOT ANSWERING. %s AUTOSPEND IS OFF.'):format(kind == 'jp' and 'JOB POINT' or 'MERIT')
+            for _ = 1, 3 do
+                windower.add_to_chat(123, "BigSpender: " .. warning)
+            end
+            debugLog('Chat: ' .. warning)
+        end
+        if not stopping and kind ~= 'trust' then checkAutoSpend(kind == 'jp' and 'merits' or 'jp') end
+    end, 10)
+end
+
+--- Sends the raise for one rank and waits for the server to confirm it.
 ---@param kind string 'merits', 'jp' or 'trust'
 ---@param id number merit or job point id, or trust category
 local function sendRaise(kind, id)
@@ -779,22 +809,7 @@ local function sendRaise(kind, id)
     pendingPointsSeen = false
     raiseNumber = raiseNumber + 1
 
-    local thisRaise = raiseNumber
-    coroutine.schedule(function()
-        if pendingId and raiseNumber == thisRaise then
-            local stopping = runStopping
-            local retry = runActive and runAutomatic and not stopping
-            failRaise('No response from the server within 5 seconds.')
-            if not stopping and pendingKind ~= 'trust' then checkAutoSpend(pendingKind == 'jp' and 'merits' or 'jp') end
-            if retry then
-                report("Autospend will try again in 30 seconds.")
-                local thisZone = zoneNumber
-                coroutine.schedule(function()
-                    if zoneNumber == thisZone then checkAutoSpend(kind) end
-                end, 30)
-            end
-        end
-    end, 5)
+    awaitRaise(kind, raiseNumber)
 
     windower.packets.inject_outgoing(packetId, raw)
 end
@@ -1115,9 +1130,11 @@ windower.register_event('addon command', function(section, command, ...)
             if kind == 'jp' then
                 jpAutoSpend = setting ~= 'off'
                 jpAutoSpendAt = spendAt
+                jpAutoBlocked = false
             else
                 meritAutoSpend = setting ~= 'off'
                 meritAutoSpendAt = spendAt
+                meritAutoBlocked = false
             end
         end
         local autoSpendOn, autoSpendAt = meritAutoSpend, meritAutoSpendAt
@@ -1163,7 +1180,6 @@ windower.register_event('incoming chunk', function(id, data)
         maxMeritPoints = nil
         meritListSeen = false
         meritListNumber = meritListNumber + 1
-        zoneNumber = zoneNumber + 1
         meritAutoBlocked = false
         jpAutoBlocked = false
     elseif id == 0x08C then
